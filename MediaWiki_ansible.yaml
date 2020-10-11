@@ -1,0 +1,147 @@
+---
+hosts: all
+become: yes
+tasks:
+    -   name: Install httpd php php-mysqlnd php-gd php-xml mariadb-server mariadb php-mbstring php-json
+        dnf:
+            name:
+                - httpd
+                - php
+                - php-mysqlnd
+                - php-gd
+                - php-xml
+                - mariadb-server
+                - mariadb
+                - php-mbstring
+                - php-json
+                - firewalld
+            state: latest
+
+# Ansible mysql_secure_installation playbook
+    -   name: delete anonymous MySQL server user for {{ ansible_hostname }}
+        action: mysql_user user="" host="{{ ansible_hostname }}" state="absent"
+
+    -   name: delete anonymous MySQL server user for localhost
+        action:  mysql_user user="" state="absent"
+
+    -   name: remove the MySQL test database
+        action: mysql_db db=test state=absent
+
+   
+# 'localhost' needs to be the last item for idempotency, see
+# http://ansible.cc/docs/modules.html#mysql-user   
+    -   name: Change root user password on first run
+        mysql_user: login_user=root
+                    login_password=''
+                    name=root
+                    password={{ mysql_root_password }}
+                    priv=*.*:ALL,GRANT
+                    host={{ item }}
+        with_items:
+            - "{{ ansible_hostname }}"
+            - 127.0.0.1
+            - ::1
+            - localhost
+
+# ansible-playbook -i <your inventary> mysql_secure_installation.yml --extra-vars "mysql_root_password=<your password>"
+
+
+    -   name: Login to the mysql db
+        community.mysql.mysql_db:
+            check_implicit_admin: yes
+            login_user: root
+            login_password: {{ mysql_root_password }}
+
+
+    -   name: Create a new database with name wikidatabase
+        community.mysql.mysql_db:
+            name: wikidatabase
+            state: present
+
+
+    -   name: mysql_secure_installation
+        community.mysql.mysql_user:
+            name:'wiki'@'localhost'
+            password:THISpasswordSHOULDbeCHANGED
+            priv:'*.*:ALL,GRANT'
+            state:present
+
+    -   name: enable mariadb
+        service:
+            name: mariadb
+            state: restarted
+
+    -   name: enable httpd
+        service:
+           name: httpd
+           state: restarted
+
+
+
+    -   name: download file from url
+        get_url:
+            url: https://releases.wikimedia.org/mediawiki/1.35/mediawiki-1.35.0.tar.gz.sig
+            dest: /home/username
+
+    -   name: download GPG signature to verify integrity
+        get_url:
+            url: https://releases.wikimedia.org/mediawiki/1.35/mediawiki-1.35.0.tar.gz.sig
+            dest: /home/username
+
+    -   name: gpg signature
+        rpm_key:
+            state: present
+            key: /home/username/*
+        
+    -   name: Extract mediawiki
+        unarchive:
+            src: /home/username/mediawiki-1.35.0.tar.gz
+            dest: /var/www
+
+    -   name: Create a symbolic link
+        file:
+            src: mediawiki-1.35.0/
+            dest: mediawiki
+            owner: apache
+            group: apache
+            state: link
+
+    -   name: Changing contents of the file /etc/httpd/conf/httpd.conf
+        ini_file:
+            dest= /etc/httpd/conf/httpd.conf
+            regexp= "DocumentRoot"
+            insertafter= "DocumentRoot"
+            line= "/var/www"
+
+    -   name: start httpd
+        service:
+            name: httpd
+            state: restarted
+
+    -   name: permit traffic in default zone for https service
+        ansible.posix.firewalld:
+            service: https
+            permanent: yes
+            state: enabled
+
+    -   name: permit traffic in default zone for http service
+        ansible.posix.firewalld:
+            service: http
+            permanent: yes
+            state: enabled
+
+    -   name: restart firewalld
+        service:
+            name: firewalld
+            state: restarted
+
+handlers:
+    -   name: start mariadb
+        service:
+            name: mariadb
+            enabled: yes
+            state: restarted
+
+
+
+      
